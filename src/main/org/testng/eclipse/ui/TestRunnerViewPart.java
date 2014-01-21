@@ -61,13 +61,11 @@ import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IFileEditorInput;
 import org.eclipse.ui.IMemento;
-import org.eclipse.ui.IPartListener2;
 import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPart;
-import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
@@ -81,7 +79,6 @@ import org.testng.ITestResult;
 import org.testng.eclipse.TestNGPlugin;
 import org.testng.eclipse.TestNGPluginConstants;
 import org.testng.eclipse.ui.summary.SummaryTab;
-import org.testng.eclipse.util.CustomSuite;
 import org.testng.eclipse.util.JDTUtil;
 import org.testng.eclipse.util.LaunchUtil;
 import org.testng.eclipse.util.PreferenceStoreUtil;
@@ -90,20 +87,19 @@ import org.testng.eclipse.util.StringUtils;
 import org.testng.remote.strprotocol.GenericMessage;
 import org.testng.remote.strprotocol.IMessageSender;
 import org.testng.remote.strprotocol.IRemoteSuiteListener;
-import org.testng.remote.strprotocol.IRemoteTestListener;
 import org.testng.remote.strprotocol.SerializedMessageSender;
 import org.testng.remote.strprotocol.StringMessageSender;
 import org.testng.remote.strprotocol.SuiteMessage;
 import org.testng.remote.strprotocol.TestMessage;
-import org.testng.remote.strprotocol.TestResultMessage;
 
 /**
  * A ViewPart that shows the results of a test run.
  *
  * @author Cedric Beust <cedric@beust.com>
  */
-public class TestRunnerViewPart extends ViewPart
-implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
+public class TestRunnerViewPart
+    extends ViewPart
+    implements IPropertyChangeListener, IRemoteSuiteListener, ITestListener {
 
   /** used by IWorkbenchSiteProgressService */
   private static final Object FAMILY_RUN = new Object();
@@ -319,14 +315,25 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
 
   public void reset() {
     reset(0, 0);
-    clearStatus();
 
     // disable all the actions on resetting the view
-    fNextAction.setEnabled(false);
-    fPrevAction.setEnabled(false);
-    m_rerunAction.setEnabled(false);
-    m_rerunFailedAction.setEnabled(false);
-    m_openReportAction.setEnabled(false);
+    disableAllActions();
+  }
+
+  private void disableAllActions() {
+    rerunFailedActionSetEnabled(false);
+    rerunActionSetEnabled(false);
+  }
+
+  private void rerunActionSetEnabled(boolean enabled) {
+    m_rerunAction.setEnabled(enabled);
+    m_openReportAction.setEnabled(enabled);
+  }
+
+  private void rerunFailedActionSetEnabled(boolean enabled) {
+    fNextAction.setEnabled(enabled);
+    fPrevAction.setEnabled(enabled);
+    m_rerunFailedAction.setEnabled(enabled);
   }
 
   private void stopUpdateJobs() {
@@ -364,15 +371,14 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
       } catch (SocketTimeoutException e) {
         TestNGPlugin.log(e);
       }
-    } while (isInitSuccess == false && launch.isTerminated() == false);
+    } while (!isInitSuccess && !launch.isTerminated());
 
-    if (isInitSuccess == true) {
+    if (isInitSuccess) {
       newSuiteRunInfo(launch);
 
       fTestRunnerClient.startListening(currentSuiteRunInfo, currentSuiteRunInfo, messageMarshaller);
-      m_rerunAction.setEnabled(true);
       m_rerunFailedAction.setEnabled(false);
-      m_openReportAction.setEnabled(true);
+      rerunActionSetEnabled(true);
     } else {
       boolean useProjectJar =
           TestNGPlugin.getPluginPreferenceStore().getUseProjectJar(project.getProject().getName());
@@ -577,15 +583,14 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
 
   private void loadTestRunTabs(CTabFolder tabFolder) {
     for (TestRunTab t : REPORTING_TABS) {
-      createTabControl(t, tabFolder, this);
+      createTabControl(t, tabFolder);
     }
     for (TestRunTab t : LISTENING_TABS) {
-      createTabControl(t, tabFolder, this);
+      createTabControl(t, tabFolder);
     }
   }
 
-  private void createTabControl(TestRunTab testRunTab, CTabFolder tabFolder,
-      TestRunnerViewPart testRunnerViewPart) {
+  private void createTabControl(TestRunTab testRunTab, CTabFolder tabFolder) {
     Composite composite = testRunTab.createTabControl(tabFolder, this);
 
     CTabItem tab = new CTabItem(tabFolder, SWT.NONE);
@@ -620,15 +625,19 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
           return;
         }
 
-        m_counterPanel.reset();
-        fProgressBar.reset(testCount);
-        clearStatus();
-
-        for (TestRunTab tab : ALL_TABS) {
-          tab.aboutToStart();
-        }
+        resetView(testCount);
       }
     });
+  }
+
+  private void resetView(final int testCount) {
+    m_counterPanel.reset();
+    fProgressBar.reset(testCount);
+    clearStatus();
+
+    for (TestRunTab tab : ALL_TABS) {
+      tab.aboutToStart();
+    }
   }
 
   @Override
@@ -695,9 +704,9 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
     IMenuManager    viewMenu = actionBars.getMenuManager();
 
     fToggleOrientationActions = new ToggleOrientationAction[] {
-        new ToggleOrientationAction(this, VIEW_ORIENTATION_VERTICAL),
-        new ToggleOrientationAction(this, VIEW_ORIENTATION_HORIZONTAL),
-        new ToggleOrientationAction(this, VIEW_ORIENTATION_AUTOMATIC)
+        new ToggleOrientationAction(VIEW_ORIENTATION_VERTICAL),
+        new ToggleOrientationAction(VIEW_ORIENTATION_HORIZONTAL),
+        new ToggleOrientationAction(VIEW_ORIENTATION_AUTOMATIC)
     };
     fNextAction = new ShowNextFailureAction(this);
     fPrevAction = new ShowPreviousFailureAction(this);
@@ -707,11 +716,7 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
     m_openReportAction= new OpenReportAction();
 
     m_clearTreeAction = new ClearResultsAction(ALL_TABS);
-    fNextAction.setEnabled(false);
-    fPrevAction.setEnabled(false);
-    m_rerunAction.setEnabled(false);
-    m_rerunFailedAction.setEnabled(false);
-    m_openReportAction.setEnabled(false);
+    disableAllActions();
 
     actionBars.setGlobalActionHandler(ActionFactory.NEXT.getId(), fNextAction);
     actionBars.setGlobalActionHandler(ActionFactory.PREVIOUS.getId(), fPrevAction);
@@ -895,7 +900,7 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
 
     private final int fActionOrientation;
 
-    public ToggleOrientationAction(TestRunnerViewPart v, int orientation) {
+    public ToggleOrientationAction(int orientation) {
       super("", AS_RADIO_BUTTON); //$NON-NLS-1$
       if(orientation == TestRunnerViewPart.VIEW_ORIENTATION_HORIZONTAL) {
         setText(ResourceUtil.getString("TestRunnerViewPart.toggle.horizontal.label")); //$NON-NLS-1$
@@ -1004,18 +1009,21 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
     }
   }
 
-  private void postTestResult(final RunInfo runInfo, final boolean isSuccess) {
-    currentSuiteRunInfo.add(runInfo);
-
+  public void onTestResult(final RunInfo runInfo) {
+    if (runInfo.getType() == ITestResult.FAILURE) {
+      String desc = runInfo.getTestDescription();
+      if (desc != null) {
+        getTestDescriptions().add(desc);
+      }
+    }
 //    long start = System.currentTimeMillis();
-
     postSyncRunnable(new Runnable() {
       public void run() {
         if(isDisposed()) {
           return;
         }
 
-        fProgressBar.step(isSuccess);
+        fProgressBar.step(runInfo.getType() == ITestResult.SUCCESS);
         for (TestRunTab tab : ALL_TABS) {
           tab.updateTestResult(runInfo, true /* expand */);
         }
@@ -1178,22 +1186,8 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
       }
     });
 
-//    postSyncRunnable(new Runnable() {
-//      public void run() {
-//        if(isDisposed()) {
-//          return;
-//        }
-//        for(int i = 0; i < ALL_TABS.size(); i++) {
-//          ((TestRunTab) ALL_TABS.elementAt(i)).updateEntry(entryId);
-//        }
-//      }
-//    });
-
     if (currentSuiteRunInfo.isSuiteRunFinished()) {
-      final boolean hasErrors = currentSuiteRunInfo.hasErrors();
-      fNextAction.setEnabled(hasErrors);
-      fPrevAction.setEnabled(hasErrors);
-      m_rerunFailedAction.setEnabled(hasErrors);
+      rerunFailedActionSetEnabled(currentSuiteRunInfo.hasErrors());
       postShowTestResultsView();
       stopTest();
       postSyncRunnable(new Runnable() {
@@ -1213,8 +1207,7 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
   }
 
   public void onStart(TestMessage tm) {
-    RunInfo ri= new RunInfo(tm.getSuiteName(), tm.getTestName());
-    ri.m_methodCount = tm.getTestMethodCount();
+    updateProgressBar();
 
     postSyncRunnable(new Runnable() {
       public void run() {
@@ -1222,8 +1215,6 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
           return;
         }
 
-        updateProgressBar();
-//        m_progressBar.setMaximum(newMaxBar);
         m_stopButton.setEnabled(true);
       }
     });
@@ -1247,56 +1238,11 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
         if(isDisposed()) {
           return;
         }
-//        for(int i = 0; i < ALL_TABS.size(); i++) {
-//          ((TestRunTab) ALL_TABS.elementAt(i)).updateEntry(entryId);
-//        }
 
         fProgressBar.stepTests();
         m_stopButton.setEnabled(false);
       }
     });
-  }
-
-  private RunInfo createRunInfo(TestResultMessage trm, String stackTrace, int type) {
-    String testName = trm.getName();
-    if (testName == null) {
-      testName = CustomSuite.DEFAULT_TEST_TAG_NAME;
-    }
-    return new RunInfo(trm.getSuiteName(),
-                       testName,
-                       trm.getTestClass(),
-                       trm.getMethod(),
-                       trm.getTestDescription(),
-                       trm.getInstanceName(),
-                       trm.getParameters(),
-                       trm.getParameterTypes(),
-                       trm.getEndMillis() - trm.getStartMillis(),
-                       stackTrace,
-                       type,
-                       trm.getInvocationCount(),
-                       trm.getCurrentInvocationCount());
-  }
-
-  public void onTestSuccess(TestResultMessage trm) {
-    postTestResult(createRunInfo(trm, null, ITestResult.SUCCESS), true);
-  }
-
-  public void onTestFailure(TestResultMessage trm) {
-    String desc = trm.getTestDescription();
-    if (desc != null) {
-    	getTestDescriptions().add (desc);
-    }
-    //    System.out.println("[INFO:onTestFailure]:" + trm.getMessageAsString());
-    postTestResult(createRunInfo(trm, trm.getStackTrace(), ITestResult.FAILURE), false);
-  }
-
-  public void onTestSkipped(TestResultMessage trm) {
-//    System.out.println("[INFO:onTestSkipped]:" + trm.getMessageAsString());
-    postTestResult(createRunInfo(trm, trm.getStackTrace(), ITestResult.SKIP), false);
-  }
-
-  public void onTestFailedButWithinSuccessPercentage(TestResultMessage trm) {
-    postTestResult(createRunInfo(trm, trm.getStackTrace(), ITestResult.SUCCESS_PERCENTAGE_FAILURE), false);
   }
 
   public Set<String> getTestDescriptions() {
@@ -1344,14 +1290,6 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
 		}
 	}
 
-	/**
-   * FIXME: currently not used; it should be use to mark the currently running
-   * tests.
-   */
-  public void onTestStart(TestResultMessage trm) {
-//    System.out.println("[INFO:onTestStart]:" + trm.getMessageAsString());
-  }
-
   public void onStart(SuiteMessage suiteMessage) {
     m_summaryTab.setExcludedMethodsModel(suiteMessage);
   }
@@ -1368,11 +1306,20 @@ implements IPropertyChangeListener, IRemoteSuiteListener, IRemoteTestListener {
           return;
         }
 
+        currentSuiteRunInfo.removeDelegateListeners();
         currentSuiteRunInfo = run;
+        run.setDelegateListeners(TestRunnerViewPart.this, TestRunnerViewPart.this);
+        resetView(run.getTestsTotalCount());
+        // disableAllActions()// TODO JNR do this and reenable selectively
+
+        final List<RunInfo> results = run.getResults();
+        for (RunInfo runInfo : results) {
+          fProgressBar.step(runInfo.getType() == ITestResult.SUCCESS);
+        }
         refreshCounters();
-        clearStatus();
+        updateProgressBar();
         for (TestRunTab tab : ALL_TABS) {
-          tab.updateTestResult(currentSuiteRunInfo.getResults());
+          tab.updateTestResult(results);
         }
       }
     });

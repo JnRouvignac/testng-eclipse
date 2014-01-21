@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.eclipse.debug.core.ILaunch;
 import org.testng.ITestResult;
+import org.testng.eclipse.util.CustomSuite;
 import org.testng.remote.strprotocol.GenericMessage;
 import org.testng.remote.strprotocol.IRemoteSuiteListener;
 import org.testng.remote.strprotocol.IRemoteTestListener;
@@ -16,13 +17,13 @@ import com.google.common.collect.Lists;
 
 /**
  * Holds the result of running a test suite. It is useful for keeping the history of test runs.
- * 
+ *
  * @author Jean-Noel Rouvignac
  */
 public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
 
   private IRemoteSuiteListener suiteDelegateListener;
-  private IRemoteTestListener testDelegateListener;
+  private ITestListener testDelegateListener;
 
   // ~ counters
   private int m_suitesTotalCount;
@@ -47,15 +48,20 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
   private ILaunch launch;
 
   public SuiteRunInfo(final IRemoteSuiteListener suiteDelegateListener,
-      final IRemoteTestListener testDelegateListener, ILaunch launch) {
-    this.suiteDelegateListener = suiteDelegateListener;
-    this.testDelegateListener = testDelegateListener;
+      final ITestListener testDelegateListener, ILaunch launch) {
+    setDelegateListeners(suiteDelegateListener, testDelegateListener);
     this.launch = launch;
   }
 
+  public void setDelegateListeners(
+      final IRemoteSuiteListener suiteDelegateListener,
+      final ITestListener testDelegateListener) {
+    this.suiteDelegateListener = suiteDelegateListener;
+    this.testDelegateListener = testDelegateListener;
+  }
+
   public void removeDelegateListeners() {
-    this.suiteDelegateListener = null;
-    this.testDelegateListener = null;
+    setDelegateListeners(null, null);
   }
 
   public SuiteRunInfo(final int suiteCount, final int testCount) {
@@ -126,17 +132,39 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
     }
   }
 
-  public void onTestStart(TestResultMessage trm) {
-    if (testDelegateListener != null) {
-      testDelegateListener.onTestStart(trm);
+  private RunInfo createRunInfo(TestResultMessage trm, String stackTrace, int type) {
+    String testName = trm.getName();
+    if (testName == null) {
+      testName = CustomSuite.DEFAULT_TEST_TAG_NAME;
     }
+    final RunInfo runInfo = new RunInfo(
+                       trm.getSuiteName(),
+                       testName,
+                       trm.getTestClass(),
+                       trm.getMethod(),
+                       trm.getTestDescription(),
+                       trm.getInstanceName(),
+                       trm.getParameters(),
+                       trm.getParameterTypes(),
+                       trm.getEndMillis() - trm.getStartMillis(),
+                       stackTrace,
+                       type,
+                       trm.getInvocationCount(),
+                       trm.getCurrentInvocationCount());
+    this.m_results.add(runInfo);
+    return runInfo;
+  }
+
+  public void onTestStart(TestResultMessage trm) {
+    // FIXME: currently not used; it should be use to mark the currently running tests.
   }
 
   public void onTestSuccess(TestResultMessage trm) {
     m_passedCount++;
     m_methodCount++;
     if (testDelegateListener != null) {
-      testDelegateListener.onTestSuccess(trm);
+      testDelegateListener.onTestResult(
+          createRunInfo(trm, null, ITestResult.SUCCESS));
     }
   }
 
@@ -144,7 +172,8 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
     m_failedCount++;
     m_methodCount++;
     if (testDelegateListener != null) {
-      testDelegateListener.onTestFailure(trm);
+      testDelegateListener.onTestResult(
+          createRunInfo(trm, trm.getStackTrace(), ITestResult.FAILURE));
     }
   }
 
@@ -152,7 +181,8 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
     m_skippedCount++;
     m_methodCount++;
     if (testDelegateListener != null) {
-      testDelegateListener.onTestSkipped(trm);
+      testDelegateListener.onTestResult(
+          createRunInfo(trm, trm.getStackTrace(), ITestResult.SKIP));
     }
   }
 
@@ -160,7 +190,8 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
     m_successPercentageFailed++;
     m_methodCount++;
     if (testDelegateListener != null) {
-      testDelegateListener.onTestFailedButWithinSuccessPercentage(trm);
+      testDelegateListener.onTestResult(
+          createRunInfo(trm, trm.getStackTrace(), ITestResult.SUCCESS_PERCENTAGE_FAILURE));
     }
   }
 
@@ -212,14 +243,14 @@ public class SuiteRunInfo implements IRemoteSuiteListener, IRemoteTestListener {
     return getResults().size();
   }
 
-  public void add(RunInfo runInfo) {
-    this.m_results.add(runInfo);
-  }
-
   public void setSuitesTotalCount(int suitesTotalCount) {
     this.m_suitesTotalCount = suitesTotalCount;
   }
-  
+
+  public int getTestsTotalCount() {
+    return m_testsTotalCount;
+  }
+
   public void setTestsTotalCount(int testsTotalCount) {
     this.m_testsTotalCount = testsTotalCount;
   }
